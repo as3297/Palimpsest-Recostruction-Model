@@ -12,5 +12,5 @@ fi
 DATADIR='C:/Data/PhD/bss_gan_palimpsest/datasets/Archimedes/test_obscured'
 EXPNAME="${DATANAME}_DCGAN_${CONV}"
 MIXNET="mixing_net_${CONV}"
-python Finv_subgraphs_back_undertext.py -m 0.5 -bs 2 -ld ${LOGDIR} -rp_under ${RESTOREDPATH_UTB} -mnet ${MIXNET} -rp_back ${RESTOREDPATH_B} -nob 1 -dd ${DATADIR} -ims 64 -exp ${EXPNAME} -K 1 -zutb 30 -zb 16 -wb true -remix false -lrm 5.0e-3 -lru 1.0e-3 -lrb 0.5e-3 -it 50 -ot 200 -lexc 1.0 -l1 0.0 -l2 1.0
+python finv_subgraphs.py -m 0.5 -bs 2 -ld ${LOGDIR} -rp_under ${RESTOREDPATH_UTB} -mnet ${MIXNET} -rp_back ${RESTOREDPATH_B} -nob 1 -dd ${DATADIR} -ims 64 -exp ${EXPNAME} -K 1 -zutb 30 -zb 16 -wb true -remix false -lrm 5.0e-3 -lru 1.0e-3 -lrb 0.5e-3 -it 50 -ot 200 -lexc 1.0 -l1 0.0 -l2 1.0
 echo "Finished training"

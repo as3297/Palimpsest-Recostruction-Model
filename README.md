@@ -1,5 +1,5 @@
 # Palimpsest-Recostruction-Model
-A palimpsest is a historical manuscript in which the original text (termed undertext) was erased and overwritten with another script in order to recycle the parchment. Here we present our for palimpsest text reconstruction. 
+A palimpsest is a historical manuscript in which the original text (termed undertext) was erased and overwritten with another script in order to recycle the parchment. Here we present our model for palimpsest text reconstruction. 
 ![Results of Archimedes palimpsest reconstruction](/images/generated_archi.png)
 ### Prerequisite
 * Python =\>3.5
