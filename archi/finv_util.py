@@ -68,23 +68,22 @@ class LatentInvModel():
                 latent_variables_background = self.latent_variable(ims_idx, init_idx, latent_init_back, self.z_b, "ut",
                                                                    nb_classes=nb_classes)
             undertext = self.text_back_model.gen_underText(latent_variables_undertext)
-
             background = self.text_back_model.gen_background(latent_variables_background)
             if self.with_background:
                 est = self.mixing_net(undertext,background,overtext,nb_obs=self.nb_obs)
             else :
-                est = self.mixing_net(undertext, overtext,nb_obs=self.nb_obs)
+                est = self.mixing_net(undertext,None,overtext,nb_obs=self.nb_obs)
             if self.mask>0:
                 overtext_mask = self.build_mask(overtext)
             else:
                 overtext_mask=None
             if self.ganloss!=0:
-                cost_l2 = self.l2_mult * tf.reduce_mean(self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask))+self.ganloss*tf.reduce_mean(self.text_back_model.disc_utb(undertext))
+                cost_l2 = self.l2_mult * self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask)+self.ganloss*tf.reduce_sum(self.text_back_model.disc_utb(undertext),axis=[1])
             else:
-                cost_l2 = self.l2_mult * tf.reduce_mean(self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask))
-            cost_l1 = self.l1_mult * tf.reduce_mean(self.l1_loss(pred=est, org=org, mask=overtext_mask, alpha=self.mask))
+                cost_l2 = self.l2_mult * self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask)
+            cost_l1 = self.l1_mult * self.l1_loss(pred=est, org=org, mask=overtext_mask, alpha=self.mask)
             if self.nb_obs>1:
-                cosine_loss = self.cosine_mult * tf.reduce_mean(self.cosine_loss(pred=est,org=org,mask=overtext_mask,alpha=self.mask))
+                cosine_loss = self.cosine_mult * self.cosine_loss(pred=est,org=org,mask=overtext_mask,alpha=self.mask)
             else:
                 cosine_loss = 0.0
             cost_back = cost_l1+cost_l2+cosine_loss
@@ -98,9 +97,7 @@ class LatentInvModel():
             self.optimizers_under[(ims_idx,init_idx)] = optimizer_under
             self.optimizers_back[(ims_idx, init_idx)] = optimizer_back
             summ_est = tf.summary.image("overlapped_{}_{}".format(ims_idx,init_idx), tf.slice(est, [0, 0, 0, 0], [-1, self.image_size, self.image_size,
-                                                                                                                      min(
-                                                                                                                          self.nb_obs,
-                                                                                                                          3 if self.nb_obs > 1 else 1)]))
+                                                                                                                      min(self.nb_obs,3 if self.nb_obs > 1 else 1)]))
             summ_under = tf.summary.image("underterxt_{}_{}".format(ims_idx, init_idx), undertext)
             summ = tf.summary.merge([summ_est,summ_under])
             self.latent_models_dict[(ims_idx,init_idx)]={"cost":cost_under,"latent_variables_undertext":latent_variables_undertext,\
@@ -124,52 +121,82 @@ class LatentInvModel():
             summ_under = tf.summary.image("underterxt",undertext)
             summ_over = tf.summary.image("overtext",overtext)
             background = self.text_back_model.gen_background(latent_variables_background)
-
-            if self.with_background:
-                background_for_summary =self.mixing_net(tf.zeros_like(background) - 1.0,
-                                                                         background,
-                                                                         tf.zeros_like(background) - 1.0, nb_obs=self.nb_obs)
-
-                est = self.mixing_net(undertext,background,overtext,nb_obs=self.nb_obs)
-            else:
-                est =self.mixing_net(undertext, overtext,nb_obs=self.nb_obs)
-
-            summ_back = tf.summary.image("background", tf.slice(background_for_summary, [0, 0, 0, 0],
-                                                                [min(self.batch_size,3), self.image_size, self.image_size,
-                                                                 min(self.nb_obs, 3)]))
-            summ_est = tf.summary.image("overlapped",tf.slice(est,[0,0,0,0],[min(self.batch_size,3),self.image_size,self.image_size,min(self.nb_obs,3 if self.nb_obs>1 else 1)]))
-            summ_org = tf.summary.image("original",tf.slice(org,[0,0,0,0],[min(self.batch_size,3),self.image_size,self.image_size,min(self.nb_obs,3 if self.nb_obs>1 else 1)]))
             if self.mask>0:
                 overtext_mask = self.build_mask(overtext)
                 summ_mask = tf.summary.image("mask",overtext_mask)
             else:
                 overtext_mask=None
-            if self.ganloss!=0:
-                l2_cost = self.l2_mult * tf.reduce_mean(self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask))+self.ganloss*tf.reduce_mean(self.discriminator(undertext))
+            if self.with_background:
+                background_for_summary =self.mixing_net(tf.zeros_like(background) - 1.0,
+                                                                         background,
+                                                                         tf.zeros_like(background) - 1.0, nb_obs=self.nb_obs)
+                summ_back = tf.summary.image("background", tf.slice(background_for_summary, [0, 0, 0, 0],
+                                                                    [min(self.batch_size, 3), self.image_size,
+                                                                     self.image_size,
+                                                                     min(self.nb_obs, 3)]))
+
+                est = self.mixing_net(undertext,background,overtext,nb_obs=self.nb_obs)
+                bare_undertext = self.mixing_net(undertext, -1 * tf.ones_like(undertext), -1 * tf.ones_like(undertext),
+                                    nb_obs=self.nb_obs)
+                summ_undertext_after_mixing = tf.summary.image("underterxt_bare", bare_undertext)
+                non_exc_loss = self.nonexc_mult * self.non_exc_loss(bare_undertext, (undertext + 1) / 2)
+                bare_overtext = self.mixing_net(-1 * tf.ones_like(undertext), -1 * tf.ones_like(undertext), overtext,
+                                                 nb_obs=self.nb_obs)
+                non_exc_loss += self.nonexc_mult * self.non_exc_loss(bare_overtext, 1 - overtext_mask)
             else:
-                l2_cost = self.l2_mult * tf.reduce_mean(self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask))
-            l1_cost = self.l1_mult * tf.reduce_mean(self.l1_loss(pred=est, org=org, mask=overtext_mask, alpha=self.mask))
-            bare_undertext = tf.reduce_mean(self.mixing_net(undertext,-1*tf.ones_like(undertext),-1*tf.ones_like(undertext),nb_obs=self.nb_obs),axis=3,keepdims=True)
-            non_exc_loss = self.nonexc_mult * tf.reduce_mean(tf.losses.sigmoid_cross_entropy(tf.image.sobel_edges(bare_undertext),tf.image.sobel_edges(-undertext)))
+                est =self.mixing_net(undertext,None,overtext,nb_obs=self.nb_obs)
+                non_exc_loss = 0
+            summ_est = tf.summary.image("overlapped",tf.slice(est,[0,0,0,0],[min(self.batch_size,3),self.image_size,self.image_size,min(self.nb_obs,3 if self.nb_obs>1 else 1)]))
+            summ_org = tf.summary.image("original",tf.slice(org,[0,0,0,0],[min(self.batch_size,3),self.image_size,self.image_size,min(self.nb_obs,3 if self.nb_obs>1 else 1)]))
+
+            if self.ganloss!=0:
+                l2_cost = self.l2_mult * self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask)+self.ganloss*tf.reduce_sum(self.discriminator(undertext),axis=[1])
+            else:
+                l2_cost = self.l2_mult * self.l2_loss(pred=est, org=org,mask=overtext_mask,alpha=self.mask)
+            l1_cost = self.l1_mult * self.l1_loss(pred=est, org=org, mask=overtext_mask, alpha=self.mask)
+
             if self.nb_obs>1:
-                cosine_loss = self.cosine_mult * tf.reduce_mean(self.cosine_loss(pred=est,org=org,mask=overtext_mask,alpha=self.mask))
+                cosine_loss = self.cosine_mult * self.cosine_loss(pred=est,org=org,mask=overtext_mask,alpha=self.mask)
             else:
                 cosine_loss = 0.0
             cost = l1_cost+l2_cost+non_exc_loss+cosine_loss
-            cost_summ_cos = tf.summary.scalar("cosine_sim_loss",cosine_loss)
-            cost_summ_l1 = tf.summary.scalar("Mix_loss_l1",l1_cost)
-            cost_summ_l2 = tf.summary.scalar("Mix_loss_l2",l2_cost)
-            cost_summ_nonexc = tf.summary.scalar("Exclusion loss", non_exc_loss)
-            summ_undertext_after_mixing = tf.summary.image("underterxt_bare",bare_undertext)
+            cost_summ_cos = tf.summary.scalar("cosine_sim_loss",tf.reduce_mean(cosine_loss))
+            cost_summ_l1 = tf.summary.scalar("Mix_loss_l1",tf.reduce_mean(l1_cost))
+            cost_summ_l2 = tf.summary.scalar("Mix_loss_l2",tf.reduce_mean(l2_cost))
+            cost_summ_nonexc = tf.summary.scalar("Exclusion loss",tf.reduce_mean(non_exc_loss))
+
 
             optimizer_mix = tf.train.AdamOptimizer(lr_rate).minimize(cost, var_list=tf.get_collection(
                       tf.GraphKeys.GLOBAL_VARIABLES, scope="MixingNet"))
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             optimizer_mix = tf.group([optimizer_mix, update_ops])
-            summary = tf.summary.merge([summ_under,summ_org,summ_est,summ_back,summ_over,summ_mask,\
-                                        cost_summ_l1,cost_summ_l2,cost_summ_nonexc,\
-                                        summ_undertext_after_mixing,cost_summ_cos])
+            if self.with_background:
+                summary = tf.summary.merge([summ_under,summ_org,summ_est,summ_back,summ_over,summ_mask,\
+                                            cost_summ_l1,cost_summ_l2,cost_summ_nonexc,\
+                                            summ_undertext_after_mixing,cost_summ_cos])
+            else:
+                summary = tf.summary.merge([summ_under, summ_org, summ_est, summ_over, summ_mask, \
+                                            cost_summ_l1, cost_summ_l2, cost_summ_nonexc, cost_summ_cos])
             return optimizer_mix,cost,latent_variables_undertext,latent_variables_background,org,overtext,undertext,est,summary
+
+    def gradient_mag(self,x,nb_ch=1):
+        """return image edges scaled between 0 and 1, 1 - edge present, 0 -edge abscent"""
+        sobel_x = tf.image.sobel_edges(x)
+        grad_x = tf.slice(sobel_x, [0, 0, 0, 0, 0], [tf.shape(x)[0], self.image_size, self.image_size, nb_ch, 1])
+        grad_y = tf.slice(sobel_x, [0, 0, 0, 0, 1], [tf.shape(x)[0], self.image_size, self.image_size, nb_ch, 1])
+        eps = 1e-9
+        sum_sq = grad_x ** 2 + grad_y ** 2
+        mag = tf.reduce_mean(tf.sqrt(tf.maximum(sum_sq,eps)),axis=[3,4])
+        return tf.divide(mag, tf.reshape(tf.reduce_max(mag,axis=[1,2]),[tf.shape(x)[0], 1, 1]))
+
+    def non_exc_loss(self,bare_text,text):
+        """calculate the loss between undertext and undertext propagated through mixing model in the absence of overtext and background.
+        Suppose to prevent mixing model to suppress undertext and substitute with paterns from background
+        """
+        mag_bare_text = self.gradient_mag(bare_text,self.nb_obs)
+        mag_text = self.gradient_mag(text)
+        non_exc_loss = self.l1_loss(tf.expand_dims(mag_bare_text,axis=3),tf.expand_dims(mag_text, axis=3))
+        return non_exc_loss
 
     def l1_loss(self,pred,org,mask=None,alpha=0.0):
         """
@@ -197,30 +224,21 @@ class LatentInvModel():
             recon_loss = tf.reduce_sum((pred - org)**2, axis=[1, 2, 3])
         return recon_loss
 
+    def cosine_similarity(self,a, b):
+        a_norm2 = tf.nn.l2_normalize(a, 3)
+        b_norm2 = tf.nn.l2_normalize(b, 3)
+        ab_norm2 = tf.reduce_sum(tf.multiply(a_norm2, b_norm2), axis=3)
+        ab_norm2_sum = tf.summary.histogram("ab_norm2",ab_norm2)
+        return tf.acos(math_ops.maximum(math_ops.minimum(ab_norm2,0.99),-0.99)),ab_norm2_sum
+
     def cosine_loss(self, pred, org, mask=None, alpha=0.0):
         """
         mask - overtext mask, shape [batch,channel,width,height]
         alpha - value of overtext
         """
-        pred = tf.transpose(pred, (3,0,1,2))
-        pred = tf.reshape(pred, (self.nb_obs, -1))
-        org = tf.transpose(org, (3, 0, 1, 2))
-        org= tf.reshape(org, (self.nb_obs, -1))
-        def cosine_similarity(a,b):
-            a_norm2 = tf.nn.l2_normalize(a ,0)
-            b_norm2 = tf.nn.l2_normalize(b, 0)
-            print(a_norm2.get_shape())
-            ab_norm2 = tf.multiply(a_norm2,b_norm2)
-            return 1-ab_norm2
-
-        if mask != None:
-            mask = tf.clip_by_value(t=mask, clip_value_min=alpha, clip_value_max=1, )
-            mask = tf.reshape(mask,[-1])
-            recon_loss = tf.multiply(cosine_similarity(org,pred),mask)
-        else:
-            recon_loss = cosine_similarity(org,pred)
-        recon_loss = tf.reduce_sum(tf.reshape(recon_loss,[-1,self.image_size,self.image_size]),axis=[1,2])
-        return recon_loss
+        cos_sim,ab_norm_sum = self.cosine_similarity(org, pred)
+        recon_loss = tf.reduce_sum(cos_sim,axis=[1,2])
+        return recon_loss,ab_norm_sum
 
     def binary_cross_entropy(self,org_images,pred_images):
         """Binary cross entropy loss
@@ -244,9 +262,10 @@ class LatentInvModel():
         vars_utb = self.graph.get_collection(name=tf.GraphKeys.GLOBAL_VARIABLES, scope="TextBinary")
         saver_restore = tf.train.Saver(vars_utb)
         saver_restore.restore(self.sess, self.gen_restore_path_utb)
-        vars_b = self.graph.get_collection(name=tf.GraphKeys.GLOBAL_VARIABLES, scope="TextBack")
-        saver_restore = tf.train.Saver(vars_b)
-        saver_restore.restore(self.sess, self.gen_restore_path_b)
+        if self.with_background:
+            vars_b = self.graph.get_collection(name=tf.GraphKeys.GLOBAL_VARIABLES, scope="TextBack")
+            saver_restore = tf.train.Saver(vars_b)
+            saver_restore.restore(self.sess, self.gen_restore_path_b)
         if self.restore_mix:
             vars_mix= self.graph.get_collection(name=tf.GraphKeys.GLOBAL_VARIABLES, scope="MixingNet")
             saver_restore = tf.train.Saver(vars_mix)
