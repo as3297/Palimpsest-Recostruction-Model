@@ -408,7 +408,7 @@ if __name__=="__main__":
     main_dir = r"C:/Data/PhD/bss_gan_palimpsest/training/DCGAN/test"
     datadir_without_bg = r"c:/Data/PhD/palimpsest/Greek_960/dataset_cleaned/train"
     datadir_with_bg = r"c:/Data/PhD/palimpsest/Greek_960/dataset_cleaned_with_background/train_text_background"
-    mode = "ut"
+    mode = "utb"
     mixing_func = "mixing_net_2d"
     model = Text_Back_Gen(batch_size=128,main_dir=main_dir,mode=mode,datadir_with_bg=datadir_with_bg,datadir_without_bg=datadir_without_bg,mix_func=mixing_func)
     model.train()
