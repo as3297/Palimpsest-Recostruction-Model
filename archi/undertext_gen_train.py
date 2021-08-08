@@ -1,4 +1,3 @@
-from image import *
 import tensorflow as tf
 from random import shuffle, choice
 from skimage import io, transform
@@ -8,10 +7,13 @@ from math import sqrt
 from utils import save_images_gan
 import time
 import datetime
+import numpy as np
+import os
 
 
 class Text_Back_Gen():
-    def __init__(self,batch_size,graph=None):
+    def __init__(self,batch_size,main_dir,mode,datadir_with_bg,datadir_without_bg,mix_func,graph=None):
+
         self.batch_size = batch_size
         self.dim_d_utb = 32#64
         self.dim_d_ut = 32
@@ -29,6 +31,11 @@ class Text_Back_Gen():
         self.gen_utb_lr = 1e-4
         self.gen_ut_lr = 1e-5
         self.mix_lr = 1e-4
+        self.main_dir = main_dir
+        self.datadir_without_bg = datadir_without_bg
+        self.datadir_with_bg = datadir_with_bg
+        self.mixing_net = eval("self." + mix_func.lower())
+        self.mode = mode #"utb" - undertext binary, trains undertext models; "ut" - undertext with back ground, trains background model
         if graph==None:
             graph = tf.get_default_graph()
         with graph.as_default() as graph_def:
@@ -104,14 +111,18 @@ class Text_Back_Gen():
         self.disc_ut_real = self.disc_ut(self.ut_real)
         self.disc_antitext_fake = self.disc_ut(ut_no_text)
 
-    def mixing_net_2d(self,undertext,background,overtext=None,nb_obs=1):
+    def mixing_net_2d(self,undertext,background=None,overtext=None,nb_obs=1):
         with tf.variable_scope("MixingNet", reuse=tf.AUTO_REUSE):
             if overtext is None:
                 source_images = tf.concat([undertext, background], 3)
-            else:
+            if background is None:
+                source_images = tf.concat([undertext, overtext], 3)
+            if overtext!=None and background!=None:
                 source_images = tf.concat([undertext, background,overtext], 3)
-            inv1 = tf.layers.conv2d(source_images, 6, self.mix_ker,padding='same',name="mix_h1",activation='relu',kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
-            inv2 = tf.layers.conv2d(inv1, nb_obs, self.mix_ker,padding='same',name="mix_h2",activation=None,kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
+            inv1 = tf.layers.conv2d(source_images, 6, self.mix_ker,padding='same',name="mix_h1",
+                                    activation='relu',kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
+            inv2 = tf.layers.conv2d(inv1, nb_obs, self.mix_ker,padding='same',name="mix_h2",
+                                    activation=None,kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
             return inv2
 
     def mixing_net_1d(self,undertext,background,overtext=None,nb_obs=1,reshape=True):
@@ -123,15 +134,19 @@ class Text_Back_Gen():
 
             source_images = tf.reshape(source_images, shape=[-1,3,1])
 
-            inv1 = tf.layers.conv1d(source_images,36, self.mix_ker,padding='same',name="mix_h1",activation='relu',kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
-            inv2 = tf.layers.conv1d(inv1, nb_obs, self.mix_ker,padding='valid',name="mix_h2",activation=None,kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
+            inv1 = tf.layers.conv1d(source_images,36, self.mix_ker,padding='same',name="mix_h1",activation='relu',
+                                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
+            inv2 = tf.layers.conv1d(inv1, nb_obs, self.mix_ker,padding='valid',name="mix_h2",activation=None,
+                                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.2))
             if reshape:
                 inv2 = tf.reshape(inv2, shape=[-1, self.image_size,self.image_size, nb_obs])
         return inv2
 
     def compile_mixing_net_3d(self):
-            self.mix_conv1 = tf.keras.layers.Conv3D(6, [self.mix_ker,self.mix_ker,self.mix_ker],padding='same',name="mix_h1",activation='relu',kernel_initializer=tf.truncated_normal_initializer(stddev=0.2),data_format="channels_last")
-            self.mix_conv2 = tf.keras.layers.Conv3D(1, [self.mix_ker,self.mix_ker,self.mix_ker],padding='same',name="mix_h2",activation='relu',kernel_initializer=tf.truncated_normal_initializer(stddev=0.2),data_format="channels_last")
+            self.mix_conv1 = tf.keras.layers.Conv3D(6, [self.mix_ker,self.mix_ker,self.mix_ker],padding='same',name="mix_h1",
+                                                    activation='relu',kernel_initializer=tf.truncated_normal_initializer(stddev=0.2),data_format="channels_last")
+            self.mix_conv2 = tf.keras.layers.Conv3D(1, [self.mix_ker,self.mix_ker,self.mix_ker],padding='same',name="mix_h2",
+                                                    activation='relu',kernel_initializer=tf.truncated_normal_initializer(stddev=0.2),data_format="channels_last")
             self.mix_conv3 = tf.keras.layers.Conv3D(1, [1,1,self.mix_ker], padding='same', name="mix_h3", activation=None,
                                           kernel_initializer=tf.truncated_normal_initializer(stddev=0.2),
                                           data_format="channels_last")
@@ -157,9 +172,9 @@ class Text_Back_Gen():
 
     def sample_ut(self,batch_size,binary):
         if binary:
-            shortcutdir = "/home/as3297/projects/bss_gan_palimpsest/datasets/Greek_960/dataset_cleaned/train"
+            shortcutdir = self.datadir_without_bg
         else:
-            shortcutdir = "/home/as3297/projects/bss_gan_palimpsest/datasets/Greek_960/dataset_cleaned_with_background/train_text_background"
+            shortcutdir = self.datadir_with_bg
         org_im_list = os.listdir(shortcutdir)
         idx_list = list(range(len(org_im_list)))
         shuffle(idx_list)
@@ -319,22 +334,28 @@ class Text_Back_Gen():
         output = tf.layers.dense(output, 1, name='Discriminator.Output' )
         return tf.reshape(output, [-1])
 
-    def train(self,mode,init_epoch=0):
-        if mode=="utb":
+    def train(self,init_epoch=0):
+        """
+        Train model of undertext or background
+         if mode - "utb" - undertext binary, trains undertext models; "ut" - undertext with back ground,
+                        trains background model
+        init_epoch - [default 0] if not 0 than restore model from this epoch
+        """
+        if self.mode=="utb":
             self.compile_model_utb()
             disc_utb_train_op, disc_utb_loss_tf, disc_utb_summ_tf = self.train_disc_utb()
             gen_utb_train_op,gen_utb_loss,gen_utb_summ = self.train_gen_utb()
             z_test = np.random.normal(0,1,[32,self.dim_z_utb])
-        elif mode=="ut":
+        elif self.mode=="ut":
             self.compile_model_ut()
             disc_ut_train_op, disc_ut_loss_tf, disc_ut_summ_tf = self.train_disc_ut()
             gen_ut_train_op,gen_ut_loss,gen_ut_summ = self.train_gen_ut()
             z_test = np.random.normal(0, 1, [32, self.dim_z_b])
 
         saver = tf.train.Saver(max_to_keep=5, keep_checkpoint_every_n_hours=0.5)
-        log_dir = "/home/as3297/projects/bss_gan_palimpsest/training/DCGAN/greek_mode_{}_background_antishort_{}lutb_{}lb_" \
+        log_dir = os.path.join(self.main_dir,"greek_mode_{}_background_antishort_{}lutb_{}lb_" \
                   "{}gutb_{}gut_{}dut_{}dutb".format(
-            mode,self.dim_z_utb,self.dim_z_b, self.dim_g_utb,self.dim_g_b, self.dim_d_ut,self.dim_d_utb)
+            self.mode,self.dim_z_utb,self.dim_z_b, self.dim_g_utb,self.dim_g_b, self.dim_d_ut,self.dim_d_utb))
         if not os.path.isdir(log_dir):
             os.makedirs(log_dir)
         print("Working directory changed to: ", log_dir)
@@ -351,7 +372,7 @@ class Text_Back_Gen():
                 print("Initialized values")
             for iteration in range(init_epoch+1,self.nb_epochs):
                 start_time = time.time()
-                if mode == "utb":
+                if self.mode == "utb":
                     _, disc_loss_utb, disc_utb_summ = sess.run([disc_utb_train_op, disc_utb_loss_tf, disc_utb_summ_tf],
                                                                feed_dict={self.utb_real: self.sample_ut(self.batch_size,
                                                                                                         binary=True)})
@@ -359,7 +380,7 @@ class Text_Back_Gen():
                                                                            time.time() - start_time))
                     writer.add_summary(disc_utb_summ, iteration)
 
-                elif mode == "ut":
+                elif self.mode == "ut":
                     for _ in range(5):
                         _, disc_loss_ut, disc_ut_summ = sess.run([disc_ut_train_op, disc_ut_loss_tf, disc_ut_summ_tf],
                                                                  feed_dict={self.ut_real: self.sample_ut(self.batch_size, binary=False),
@@ -367,13 +388,13 @@ class Text_Back_Gen():
                         print("Epoch:{}, disc_ut loss:{}, time:{:.3f}".format(iteration,disc_loss_ut,time.time() - start_time))
                         writer.add_summary(disc_ut_summ, iteration)
 
-                if mode == "utb":
+                if self.mode == "utb":
                     _,gen_loss,gen_undertext_summ = sess.run([gen_utb_train_op,gen_utb_loss,gen_utb_summ],feed_dict={ self.utb_real: self.sample_ut(self.batch_size, binary=True)})
                     writer.add_summary(gen_undertext_summ,iteration)
                     if iteration%100==0:
                         saver.save(sess, os.path.join(log_dir, 'model'), global_step=iteration)
                         self.test_undertext(z_test, log_dir, iteration, True)
-                elif mode == "ut":
+                elif self.mode == "ut":
                     _,gen_loss,gen_back_summ = sess.run([gen_ut_train_op,gen_ut_loss,gen_ut_summ],feed_dict={self.utb_real: self.sample_ut(self.batch_size, binary=True)})
                     writer.add_summary(gen_back_summ, iteration)
                     if iteration%50==0:
@@ -384,13 +405,13 @@ class Text_Back_Gen():
 
 
 if __name__=="__main__":
-     model = Text_Back_Gen(batch_size=128)
-     model.train('utb')
-     mixing_net = eval("model.mixing_net_2d")
-     z_b = np.random.normal(0, 1, [16, model.dim_z_b])
-     log_dir = "/home/as3297/projects/bss_gan_palimpsest/training/DCGAN/finetune_greek_mode_full_data_ut16zb_8gut_16dut_2020-03-11-21-37"
-     init_epoch = 4000
-     model.test_undertext(np.random.normal(0,1,[100,30]),log_dir=r'C:\Data\PhD\bss_gan_palimpsest\training\DCGAN\greek_mode_utb_background_antishort_30lutb_16lb_32gutb_8gut_16dut_8dutb',init_epoch=19999, save=True)
+    main_dir = r"C:/Data/PhD/bss_gan_palimpsest/training/DCGAN/test"
+    datadir_without_bg = r"c:/Data/PhD/palimpsest/Greek_960/dataset_cleaned/train"
+    datadir_with_bg = r"c:/Data/PhD/palimpsest/Greek_960/dataset_cleaned_with_background/train_text_background"
+    mode = "ut"
+    mixing_func = "mixing_net_2d"
+    model = Text_Back_Gen(batch_size=128,main_dir=main_dir,mode=mode,datadir_with_bg=datadir_with_bg,datadir_without_bg=datadir_without_bg,mix_func=mixing_func)
+    model.train()
 
 
 
