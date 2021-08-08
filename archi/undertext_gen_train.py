@@ -12,7 +12,7 @@ import os
 
 
 class Text_Back_Gen():
-    def __init__(self,batch_size,main_dir,mode,datadir_with_bg,datadir_without_bg,mix_func,graph=None):
+    def __init__(self,batch_size,graph=None,main_dir=None,mode=None,datadir_with_bg=None,datadir_without_bg=None,mix_func=None):
 
         self.batch_size = batch_size
         self.dim_d_utb = 32#64
@@ -34,7 +34,8 @@ class Text_Back_Gen():
         self.main_dir = main_dir
         self.datadir_without_bg = datadir_without_bg
         self.datadir_with_bg = datadir_with_bg
-        self.mixing_net = eval("self." + mix_func.lower())
+        if not mix_func==None:
+            self.mixing_net = eval("self." + mix_func.lower())
         self.mode = mode #"utb" - undertext binary, trains undertext models; "ut" - undertext with back ground, trains background model
         if graph==None:
             graph = tf.get_default_graph()
